@@ -1,0 +1,107 @@
+name: Resolve PR merge conflicts
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Resolve conflicts but do not push"
+        type: boolean
+        default: true
+
+# One run at a time; a newer push to main waits for the current run.
+concurrency:
+  group: resolve-conflicts
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # force-push rebased PR branches
+  pull-requests: write  # optional outcome comments
+
+env:
+  # Open-weight model served locally by Ollama: no API keys needed.
+  LLM_MODEL: ${{ vars.LLM_MODEL || 'qwen2.5-coder:7b' }}
+  MAX_PARALLEL: ${{ vars.MAX_PARALLEL || '2' }}
+  AGENT_TIMEOUT: ${{ vars.AGENT_TIMEOUT || '15m' }}
+  VERIFY_CMD: ${{ vars.VERIFY_CMD }}
+  COMMENT: ${{ vars.COMMENT || 'false' }}
+  SKIP_DRAFTS: ${{ vars.SKIP_DRAFTS || 'false' }}
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+  # Pushes made with GITHUB_TOKEN don't trigger CI on the PR. Set a
+  # REBASE_TOKEN secret (PAT / GitHub App token) if you want that.
+  GH_TOKEN: ${{ secrets.REBASE_TOKEN || github.token }}
+  OLLAMA_HOST: http://127.0.0.1:11434
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ env.GH_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build merge-conflict-loop
+        run: go build -o "$RUNNER_TEMP/mcl" ./cmd/merge-conflict-loop
+
+      - name: Find conflicting PRs
+        id: check
+        run: |
+          # Cheap pre-check so we skip installing the LLM stack when idle.
+          "$RUNNER_TEMP/mcl" --list-only > "$RUNNER_TEMP/prs.txt"
+          cat "$RUNNER_TEMP/prs.txt"
+          echo "count=$(grep -c '^conflicting #' "$RUNNER_TEMP/prs.txt" || true)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.count != '0'
+        with:
+          node-version: 22
+
+      - name: Install pi coding agent
+        if: steps.check.outputs.count != '0'
+        run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+
+      - name: Cache Ollama models
+        if: steps.check.outputs.count != '0'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-${{ runner.os }}-${{ env.LLM_MODEL }}
+
+      - name: Start Ollama
+        if: steps.check.outputs.count != '0'
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          # The installer may start a system service using another model dir;
+          # stop it and run our own server against the cached dir.
+          sudo systemctl stop ollama 2>/dev/null || true
+          OLLAMA_NUM_PARALLEL="$MAX_PARALLEL" OLLAMA_MODELS="$HOME/.ollama/models" \
+            nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS "$OLLAMA_HOST/api/tags" >/dev/null && break
+            sleep 1
+          done
+          ollama pull "$LLM_MODEL"
+
+      - name: Rebase conflicting PRs
+        if: steps.check.outputs.count != '0'
+        run: |
+          git config --global user.name "merge-conflict-loop[bot]"
+          git config --global user.email "merge-conflict-loop@users.noreply.github.com"
+          "$RUNNER_TEMP/mcl"
+
+      - name: Upload logs
+        if: always() && steps.check.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-conflict-loop-logs
+          path: |
+            ${{ runner.temp }}/merge-conflict-loop/*.log
+            ${{ runner.temp }}/ollama.log
+          if-no-files-found: ignore
