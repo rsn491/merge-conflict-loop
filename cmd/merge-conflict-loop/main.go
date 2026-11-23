@@ -19,11 +19,20 @@ import (
 	"github.com/rsn491/merge-conflict-loop/internal/resolver"
 )
 
+// version is set at release build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	os.Exit(run())
 }
 
 func run() int {
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-version" {
+			fmt.Println("merge-conflict-loop", version)
+			return 0
+		}
+	}
 	cfg, err := config.Load(os.Args[1:])
 	if err == flag.ErrHelp {
 		return 0
@@ -46,7 +55,7 @@ func run() int {
 		return 1
 	}
 
-	fmt.Printf("merge-conflict-loop: repo=%s model=%s parallel=%d dry-run=%v\n", cfg.Repo, cfg.Model, cfg.MaxParallel, cfg.DryRun)
+	fmt.Printf("merge-conflict-loop %s: repo=%s model=%s parallel=%d dry-run=%v\n", version, cfg.Repo, cfg.Model, cfg.MaxParallel, cfg.DryRun)
 
 	pi := &agent.Pi{
 		Cmd:        cfg.AgentCmd,

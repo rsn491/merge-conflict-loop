@@ -1,0 +1,169 @@
+name: Merge Conflict Loop
+description: Rebase open PRs that have merge conflicts and let a local open-weight LLM agent (pi + Ollama) resolve them. No API keys.
+author: rsn491
+branding:
+  icon: git-merge
+  color: purple
+
+inputs:
+  github-token:
+    description: Token for GitHub API calls (listing PRs, comments). Pushes use the credentials of your actions/checkout step.
+    default: ${{ github.token }}
+  model:
+    description: Ollama model used by the agent (must support tool calling).
+    default: qwen2.5-coder:7b
+  max-parallel:
+    description: Number of PRs resolved concurrently.
+    default: "2"
+  agent-timeout:
+    description: Timeout per agent invocation (Go duration, e.g. 15m).
+    default: 15m
+  verify-cmd:
+    description: Optional shell command that must pass in the rebased branch before it is pushed (e.g. "go test ./...").
+    default: ""
+  comment:
+    description: Comment on each processed PR with the outcome.
+    default: "false"
+  skip-drafts:
+    description: Ignore draft PRs.
+    default: "false"
+  skip-label:
+    description: PRs with this label are ignored.
+    default: no-auto-rebase
+  dry-run:
+    description: Resolve conflicts but do not push.
+    default: "false"
+  committer-name:
+    description: Committer name for rebased commits.
+    default: github-actions[bot]
+  committer-email:
+    description: Committer email for rebased commits (on GHES, use your instance's bot id).
+    default: 41898282+github-actions[bot]@users.noreply.github.com
+  version:
+    description: Release of the merge-conflict-loop CLI to install (e.g. v0.0.1). Defaults to the action's ref when it is a v* tag; otherwise the CLI is built from the action's source.
+    default: ""
+
+outputs:
+  conflicting:
+    description: Number of conflicting PRs found.
+    value: ${{ steps.check.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install merge-conflict-loop CLI
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/merge-conflict-loop-bin"
+        mkdir -p "$bin"
+        echo "$bin" >> "$GITHUB_PATH"
+        echo "dir=$bin" >> "$GITHUB_OUTPUT"
+        ref="$INPUT_VERSION"
+        if [ -z "$ref" ] && [[ "$ACTION_REF" == v* ]]; then ref="$ACTION_REF"; fi
+        if [ -n "$ref" ]; then
+          VERSION="$ref" INSTALL_DIR="$bin" sh "$GITHUB_ACTION_PATH/install.sh"
+          echo "mode=release" >> "$GITHUB_OUTPUT"
+        else
+          echo "action ref '${ACTION_REF:-local}' is not a release tag; building from source"
+          echo "mode=source" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Set up Go (source build)
+      if: steps.install.outputs.mode == 'source'
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.mod
+
+    - name: Build merge-conflict-loop from source
+      if: steps.install.outputs.mode == 'source'
+      shell: bash
+      env:
+        BIN_DIR: ${{ steps.install.outputs.dir }}
+      run: cd "$GITHUB_ACTION_PATH" && go build -trimpath -ldflags "-X main.version=${GITHUB_ACTION_REF:-dev}" -o "$BIN_DIR/merge-conflict-loop" ./cmd/merge-conflict-loop
+
+    - name: Find conflicting PRs
+      id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SKIP_DRAFTS: ${{ inputs.skip-drafts }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/merge-conflict-loop-prs.txt"
+        merge-conflict-loop --list-only | tee "$out"
+        echo "count=$(grep -c '^conflicting #' "$out" || true)" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Node (for pi)
+      if: steps.check.outputs.count != '0'
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Install pi coding agent
+      if: steps.check.outputs.count != '0'
+      shell: bash
+      run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+
+    - name: Cache Ollama models
+      if: steps.check.outputs.count != '0'
+      uses: actions/cache@v4
+      with:
+        path: ~/.ollama/models
+        key: merge-conflict-loop-ollama-${{ runner.os }}-${{ inputs.model }}
+
+    - name: Start Ollama
+      if: steps.check.outputs.count != '0'
+      shell: bash
+      env:
+        MODEL: ${{ inputs.model }}
+        MAX_PARALLEL: ${{ inputs.max-parallel }}
+      run: |
+        set -euo pipefail
+        if ! command -v ollama >/dev/null; then
+          curl -fsSL https://ollama.com/install.sh | sh
+        fi
+        # The installer may start a system service with another model dir;
+        # run our own server against the cached directory instead.
+        sudo systemctl stop ollama 2>/dev/null || true
+        OLLAMA_NUM_PARALLEL="$MAX_PARALLEL" OLLAMA_MODELS="$HOME/.ollama/models" \
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+        for _ in $(seq 1 60); do
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && break
+          sleep 1
+        done
+        ollama pull "$MODEL"
+
+    - name: Rebase conflicting PRs
+      if: steps.check.outputs.count != '0'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        LLM_MODEL: ${{ inputs.model }}
+        OLLAMA_HOST: http://127.0.0.1:11434
+        MAX_PARALLEL: ${{ inputs.max-parallel }}
+        AGENT_TIMEOUT: ${{ inputs.agent-timeout }}
+        VERIFY_CMD: ${{ inputs.verify-cmd }}
+        COMMENT: ${{ inputs.comment }}
+        SKIP_DRAFTS: ${{ inputs.skip-drafts }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        GIT_COMMITTER_NAME: ${{ inputs.committer-name }}
+        GIT_COMMITTER_EMAIL: ${{ inputs.committer-email }}
+      run: merge-conflict-loop
+
+    - name: Upload logs
+      if: always() && steps.check.outputs.count != '0' && steps.check.outputs.count != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: merge-conflict-loop-logs
+        path: |
+          ${{ runner.temp }}/merge-conflict-loop/*.log
+          ${{ runner.temp }}/ollama.log
+        if-no-files-found: ignore

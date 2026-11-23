@@ -81,6 +81,7 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.SkipPull, "skip-model-check", envBool("SKIP_MODEL_CHECK", false), "don't check/pull the model in Ollama")
 
 	fs.BoolVar(&c.ListOnly, "list-only", false, "only list conflicting PRs and exit")
+	fs.Bool("version", false, "print the version and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err

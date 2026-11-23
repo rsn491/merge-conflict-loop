@@ -36,3 +36,4 @@ go.work.sum
 # merge-conflict-loop build output
 /mcl
 /merge-conflict-loop
+/dist
