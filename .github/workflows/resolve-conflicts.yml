@@ -28,9 +28,13 @@ env:
   COMMENT: ${{ vars.COMMENT || 'false' }}
   SKIP_DRAFTS: ${{ vars.SKIP_DRAFTS || 'false' }}
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
-  # Pushes made with GITHUB_TOKEN don't trigger CI on the PR. Set a
-  # REBASE_TOKEN secret (PAT / GitHub App token) if you want that.
-  GH_TOKEN: ${{ secrets.REBASE_TOKEN || github.token }}
+  # API calls (listing PRs, comments) always use the built-in token, so
+  # comments are posted by github-actions[bot].
+  GH_TOKEN: ${{ github.token }}
+  # Committer of rebased commits. Defaults to GitHub's Actions bot identity
+  # (see actions/checkout README); override with repo variables, e.g. on GHES.
+  GIT_COMMITTER_NAME: ${{ vars.GIT_COMMITTER_NAME || 'github-actions[bot]' }}
+  GIT_COMMITTER_EMAIL: ${{ vars.GIT_COMMITTER_EMAIL || '41898282+github-actions[bot]@users.noreply.github.com' }}
   OLLAMA_HOST: http://127.0.0.1:11434
 
 jobs:
@@ -41,7 +45,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ env.GH_TOKEN }}
+          # Pushes use these credentials. Pushes made with GITHUB_TOKEN don't
+          # trigger CI on the PR; set a REBASE_TOKEN secret (GitHub App token
+          # or PAT) if you want that.
+          token: ${{ secrets.REBASE_TOKEN || github.token }}
 
       - uses: actions/setup-go@v5
         with:
@@ -92,8 +99,8 @@ jobs:
       - name: Rebase conflicting PRs
         if: steps.check.outputs.count != '0'
         run: |
-          git config --global user.name "merge-conflict-loop[bot]"
-          git config --global user.email "merge-conflict-loop@users.noreply.github.com"
+          git config --global user.name "$GIT_COMMITTER_NAME"
+          git config --global user.email "$GIT_COMMITTER_EMAIL"
           "$RUNNER_TEMP/mcl"
 
       - name: Upload logs

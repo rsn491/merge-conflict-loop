@@ -15,6 +15,16 @@ import (
 	"time"
 )
 
+// Default committer: GitHub's built-in Actions bot, as recommended in the
+// actions/checkout README ("Push a commit using the built-in token"). The
+// email is {user.id}+{user.login}@users.noreply.github.com, which links the
+// commits to the bot account on github.com. On GHES the id differs; override
+// with --git-email / GIT_COMMITTER_EMAIL.
+const (
+	DefaultBotName  = "github-actions[bot]"
+	DefaultBotEmail = "41898282+github-actions[bot]@users.noreply.github.com"
+)
+
 // Config holds all settings for a run.
 type Config struct {
 	Repo         string // owner/name
@@ -66,8 +76,8 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.AgentCmd, "agent-cmd", env("AGENT_CMD", "pi"), "agent executable (pi-compatible CLI)")
 	fs.StringVar(&c.WorkRoot, "work-root", env("WORK_ROOT", defaultWorkRoot()), "directory for worktrees and logs")
 	fs.BoolVar(&c.Strict, "strict", envBool("STRICT", false), "exit 2 if any PR could not be resolved")
-	fs.StringVar(&c.GitName, "git-name", env("GIT_COMMITTER_NAME", "merge-conflict-loop[bot]"), "committer name")
-	fs.StringVar(&c.GitEmail, "git-email", env("GIT_COMMITTER_EMAIL", "merge-conflict-loop@users.noreply.github.com"), "committer email")
+	fs.StringVar(&c.GitName, "git-name", env("GIT_COMMITTER_NAME", DefaultBotName), "committer name for rebased commits")
+	fs.StringVar(&c.GitEmail, "git-email", env("GIT_COMMITTER_EMAIL", DefaultBotEmail), "committer email for rebased commits")
 	fs.BoolVar(&c.SkipPull, "skip-model-check", envBool("SKIP_MODEL_CHECK", false), "don't check/pull the model in Ollama")
 
 	fs.BoolVar(&c.ListOnly, "list-only", false, "only list conflicting PRs and exit")

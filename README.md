@@ -24,7 +24,7 @@ push to main
 Safety properties:
 - **Nothing is pushed unless every conflict was resolved.** The tool checks the agent's output itself instead of trusting the model. If anything fails, the rebase is aborted and the PR is left untouched.
 - **`--force-with-lease`.** If the author pushes to the branch while the agent is working, the push is rejected and their work is not overwritten.
-- **The agent may edit only the conflicted files.** Any other edit it makes is reverted. Original commit authors are kept, and the committer is set to `merge-conflict-loop[bot]`.
+- **The agent may edit only the conflicted files.** Any other edit it makes is reverted. Original commit authors are kept, and the committer is set to `github-actions[bot]` (see [Bot identity](#bot-identity)).
 - **Some PRs are skipped:** PRs from forks (the token can't push to them), PRs with the `no-auto-rebase` label, and drafts when `SKIP_DRAFTS=true`.
 
 ## GitHub Action
@@ -37,7 +37,15 @@ Safety properties:
 
 You can set these repository **variables** (Settings → Variables) to change its behaviour: `LLM_MODEL`, `MAX_PARALLEL`, `AGENT_TIMEOUT`, `VERIFY_CMD`, `COMMENT`, `SKIP_DRAFTS`.
 
-> **CI on rebased PRs:** GitHub does not start workflows for pushes made with the default `GITHUB_TOKEN`. To have the PR's checks re-run after a rebase, add a `REBASE_TOKEN` secret: a fine-grained PAT or GitHub App token with `contents: write` and `pull_requests: write`. Pushes to PR branches never re-trigger this workflow, because it only listens to `main`.
+### Bot identity
+
+By default everything appears as GitHub's built-in Actions bot:
+- **Comments** are posted with the workflow's `GITHUB_TOKEN`, so they come from `github-actions[bot]`.
+- **Rebased commits** use the committer `github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>`. This is the identity GitHub recommends in the [`actions/checkout` README](https://github.com/actions/checkout#push-a-commit-using-the-built-in-token). The email has the form `{user.id}+{user.login}@users.noreply.github.com`, which links the commits to the bot's account. Original authors are kept, so GitHub shows "<author> authored and github-actions[bot] committed".
+
+To use a different identity, set the repository variables `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`, or pass `--git-name` and `--git-email` when running locally. On GitHub Enterprise Server the bot has a different ID, so look it up at `https://<host>/api/v3/users/github-actions%5Bbot%5D` and set `GIT_COMMITTER_EMAIL` to match.
+
+> **CI on rebased PRs:** GitHub does not start workflows for pushes made with the default `GITHUB_TOKEN`. To have the PR's checks re-run after a rebase, add a `REBASE_TOKEN` secret: a GitHub App token or fine-grained PAT with `contents: write`. It is used **only for the push**. Comments still come from `github-actions[bot]`, but the PR timeline will show the token's owner as the one who force-pushed. Pushes to PR branches never re-trigger this workflow, because it only listens to `main`.
 
 ## Running locally
 
@@ -69,6 +77,8 @@ Every flag also has an environment variable:
 | `--skip-label` | `SKIP_LABEL` | `no-auto-rebase` | opt-out label |
 | `--agent-cmd` | `AGENT_CMD` | `pi` | any pi-compatible CLI |
 | `--work-root` | `WORK_ROOT` | `$RUNNER_TEMP` or `/tmp` | worktrees and logs |
+| `--git-name` | `GIT_COMMITTER_NAME` | `github-actions[bot]` | committer of rebased commits |
+| `--git-email` | `GIT_COMMITTER_EMAIL` | `41898282+github-actions[bot]@…` | committer email |
 | `--strict` | `STRICT` | `false` | exit 2 if any PR was not resolved |
 | `--list-only` | — | `false` | print conflicting PRs and exit |
 
