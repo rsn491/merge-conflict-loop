@@ -1,0 +1,40 @@
+# Copy to .github/workflows/resolve-conflicts.yml in your repository.
+name: Resolve PR merge conflicts
+
+on:
+  push:
+    branches: [main]        # your default branch
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Resolve conflicts but do not push
+        type: boolean
+        default: true
+
+concurrency:
+  group: resolve-conflicts
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # push rebased PR branches
+  pull-requests: write      # optional outcome comments
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Optional: pushes made with the default token don't re-run the PR's CI.
+          # token: ${{ secrets.REBASE_TOKEN }}
+
+      - uses: rsn491/merge-conflict-loop@v0.0.1
+        with:
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          # model: qwen2.5-coder:7b        # any Ollama model with tool calling
+          # max-parallel: 2
+          # verify-cmd: go test ./...      # must pass before pushing
+          # comment: true                  # comment on PRs with the outcome
+          # skip-drafts: true

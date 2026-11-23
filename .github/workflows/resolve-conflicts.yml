@@ -1,0 +1,39 @@
+# Dogfoods the action in this repository (uses: ./). See examples/ for the
+# workflow to copy into your own repository.
+name: Resolve PR merge conflicts
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Resolve conflicts but do not push"
+        type: boolean
+        default: true
+
+concurrency:
+  group: resolve-conflicts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.REBASE_TOKEN || github.token }}
+
+      - uses: ./
+        with:
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          model: ${{ vars.LLM_MODEL || 'qwen2.5-coder:7b' }}
+          max-parallel: ${{ vars.MAX_PARALLEL || '2' }}
+          verify-cmd: ${{ vars.VERIFY_CMD }}
+          comment: ${{ vars.COMMENT || 'false' }}
